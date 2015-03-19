@@ -6,8 +6,13 @@ var io = require('socket.io-client');
 var Promise = require("bluebird");
 var util = require("util");
 var TraderNet = (function () {
-    function TraderNet(url) {
+    function TraderNet(url, opts) {
+        var _this = this;
         this.url = url;
+        this.opts = opts;
+        this.notifyPortfolio = function () {
+            _this.ws.emit('notifyPortfolio');
+        };
     }
     TraderNet.formatPutOrder = function (data) {
         return {
@@ -27,7 +32,39 @@ var TraderNet = (function () {
             userOrderId: data.userOrderId
         };
     };
+    TraderNet.mapPortfolio = function (servicePortfolio) {
+        return {
+            key: servicePortfolio.key,
+            accounts: servicePortfolio.acc.map(TraderNet.mapAccount),
+            positions: servicePortfolio.pos.map(TraderNet.mapPosition)
+        };
+    };
+    TraderNet.mapAccount = function (serviceAccount) {
+        return {
+            availableAmount: serviceAccount.s,
+            currency: trader.CurrencyCodes[serviceAccount.curr],
+            currencyRate: serviceAccount.currval,
+            forecastIn: serviceAccount.forecast_in,
+            forecastOut: serviceAccount.forecast_out
+        };
+    };
+    TraderNet.mapPosition = function (servicePos) {
+        return {
+            security: trader.TicketCodes[servicePos.i],
+            securityType: servicePos.t,
+            securityKind: servicePos.k,
+            price: servicePos.s,
+            quantity: servicePos.q,
+            currency: trader.CurrencyCodes[servicePos.curr],
+            currencyRate: servicePos.currval,
+            securityName: servicePos.name,
+            securityName2: servicePos.name2,
+            openPrice: servicePos.open_bal,
+            marketPrice: servicePos.mkt_price
+        };
+    };
     TraderNet.prototype.connect = function (auth) {
+        var _this = this;
         var _ws = io(this.url, { transports: ['websocket'] });
         var ws = Promise.promisifyAll(_ws);
         this.ws = ws;
@@ -39,11 +76,19 @@ var TraderNet = (function () {
             };
             var sig = crypto.sign(data, auth.securityKey);
             return ws.emitAsync('auth', data, sig);
+        }).then(function (res) {
+            if (_this.opts) {
+                if (_this.opts.onPortfolio) {
+                    ws.on('portfolio', function (portfolio) {
+                        _this.opts.onPortfolio(TraderNet.mapPortfolio(portfolio[0].ps));
+                    });
+                }
+            }
+            return res;
         });
     };
     TraderNet.prototype.putOrder = function (data) {
         var formatted = TraderNet.formatPutOrder(data);
-        console.log(formatted);
         return this.ws.emitAsync('putOrder', formatted);
     };
     return TraderNet;
